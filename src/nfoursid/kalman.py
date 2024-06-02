@@ -1,3 +1,6 @@
+# import sys
+# import os
+# sys.path.append(os.path.dirname(__file__))
 from typing import List, Optional
 
 from matplotlib import figure as matplotlib_figure
@@ -5,8 +8,8 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from nfoursid.state_space import StateSpace
-from nfoursid.utils import Utils
+from .state_space import StateSpace as StateSpace
+from .utils import Utils
 
 
 class Kalman:

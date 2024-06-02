@@ -5,7 +5,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib import figure as matplotlib_figure
 
-from nfoursid.utils import Utils
+from .utils import Utils
 
 
 class StateSpace:
