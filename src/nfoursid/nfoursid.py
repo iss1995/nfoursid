@@ -40,14 +40,14 @@ class NFourSID:
         self.y_dim = self.y_array.shape[1]
 
     def subspace_identification(self):
-        u_hankel = Utils.block_hankel_matrix(self.u_array, self.num_block_rows).tocsr()
-        y_hankel = Utils.block_hankel_matrix(self.y_array, self.num_block_rows).tocsr()
+        u_hankel = Utils.block_hankel_matrix_parallel(self.u_array, self.num_block_rows).tocsr()
+        y_hankel = Utils.block_hankel_matrix_parallel(self.y_array, self.num_block_rows).tocsr()
 
         u_past, u_future = u_hankel[:, :-self.num_block_rows], u_hankel[:, self.num_block_rows:]
         y_past, y_future = y_hankel[:, :-self.num_block_rows], y_hankel[:, self.num_block_rows:]
-        u_instrumental_y = sparse.hstack([u_future, u_past, y_past, y_future])
+        u_instrumental_y = sparse.vstack([u_future, u_past, y_past, y_future])
 
-        q, r = np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced')  # QR on dense array
+        q, r = np.linalg.qr(u_instrumental_y.toarray(), mode='reduced')  # QR on dense array
 
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
         self.R32 = r[-y_rows:, u_rows:-y_rows]
@@ -65,8 +65,71 @@ class NFourSID:
 
         return self._identify_state_space(observability_decomposition)
 
-    def _identify_state_space(self, observability_decomposition: Decomposition) -> Tuple[StateSpace, np.ndarray]:
+    def apply_n4sid(self, rank: int = None) -> Tuple[StateSpace, np.ndarray]:
+        if rank is None:
+            rank = self.y_dim * self.num_block_rows
+
+        self.x_dim = rank
+
+        observability_decomposition = self._apply_observability_decomposition()
+
+        covariance_matrix, abcd = self._calculate_covariance_matrix(observability_decomposition)
+
+        q = covariance_matrix[:self.x_dim, :self.x_dim]
+        r = covariance_matrix[self.x_dim:, self.x_dim:]
+        s = covariance_matrix[:self.x_dim, self.x_dim:]
+        state_space_covariance_matrix = np.block([
+            [r, s.T],
+            [s, q]
+        ])
+        return (
+            StateSpace(
+                abcd[:self.x_dim, :self.x_dim],
+                abcd[:self.x_dim, self.x_dim:],
+                abcd[self.x_dim:, :self.x_dim],
+                abcd[self.x_dim:, self.x_dim:],
+            ),
+            (state_space_covariance_matrix + state_space_covariance_matrix.T) / 2
+        )
+
+    def _apply_observability_decomposition(self):
+        u_hankel = Utils.block_hankel_matrix_parallel(self.u_array, self.num_block_rows).tocsr()
+        y_hankel = Utils.block_hankel_matrix_parallel(self.y_array, self.num_block_rows).tocsr()
+
+        u_past, u_future = u_hankel[:, :-self.num_block_rows], u_hankel[:, self.num_block_rows:]
+        y_past, y_future = y_hankel[:, :-self.num_block_rows], y_hankel[:, self.num_block_rows:]
+        # u_instrumental_y = sparse.hstack([u_future, u_past, y_past, y_future])
+
+        # approximate QR with Cholesky
+        _, r = Utils.sparse_qr(sparse.hstack([u_future, u_past, y_past, y_future]).T, mode='NATURAL')
+
+        y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
+
+        R22 = r[u_rows:-y_rows, u_rows:-y_rows]
+        R32 = r[-y_rows:, u_rows:-y_rows]
+
+        u_and_y = sparse.hstack([u_hankel, y_hankel])
+        observability = R32 @ sparse.linalg.pinv(R22 @ u_and_y)
+        observability_decomposition = Utils.reduce_decomposition(
+            Utils.eigenvalue_decomposition(observability),
+            self.x_dim
+        )
+
+        return observability_decomposition
+
+    def _calculate_covariance_matrix(self, observability_decomposition: Decomposition) -> np.ndarray:
         x = (np.sqrt(observability_decomposition.s.diagonal()) @ observability_decomposition.vh)[:, :-1]
+        last_y, last_u = self.y_array[self.num_block_rows:, :].T, self.u_array[self.num_block_rows:, :].T
+        x_and_y = np.concatenate([x[:, 1:], last_y[:, :-1]])
+        x_and_u = np.concatenate([x[:, :-1], last_u[:, :-1]])
+        abcd = np.linalg.pinv(x_and_u @ x_and_u.T) @ x_and_u @ x_and_y.T
+        abcd = abcd.T
+        residuals = x_and_y - abcd @ x_and_u
+        covariance_matrix = residuals @ residuals.T / residuals.shape[1]
+        return covariance_matrix, abcd
+
+    def _identify_state_space(self, observability_decomposition: Decomposition) -> Tuple[StateSpace, np.ndarray]:
+        x = (np.sqrt(observability_decomposition.s) @ observability_decomposition.vh)[:, :-1]
         last_y, last_u = self.y_array[self.num_block_rows:, :].T, self.u_array[self.num_block_rows:, :].T
         x_and_y = np.concatenate([x[:, 1:], last_y[:, :-1]])
         x_and_u = np.concatenate([x[:, :-1], last_u[:, :-1]])
@@ -92,10 +155,11 @@ class NFourSID:
         )
 
     def _get_observability_matrix_decomposition(self) -> Decomposition:
-        u_hankel = Utils.block_hankel_matrix(self.u_array, self.num_block_rows).tocsr()
-        y_hankel = Utils.block_hankel_matrix(self.y_array, self.num_block_rows).tocsr()
-        u_and_y = sparse.hstack([u_hankel, y_hankel])
-        observability = self.R32 @ sparse.linalg.pinv(self.R22 @ u_and_y)
+        u_hankel = Utils.block_hankel_matrix_parallel(self.u_array, self.num_block_rows).tocsr()
+        y_hankel = Utils.block_hankel_matrix_parallel(self.y_array, self.num_block_rows).tocsr()
+        u_and_y = sparse.vstack([u_hankel, y_hankel])
+        observability = self.R32 @ np.linalg.pinv(self.R22)
+        observability = sparse.csr_matrix(observability) @ u_and_y
         observability_decomposition = Utils.reduce_decomposition(
             Utils.eigenvalue_decomposition(observability),
             self.x_dim
@@ -105,7 +169,8 @@ class NFourSID:
     def plot_eigenvalues(self, ax: plt.Axes):
         if self.R32_decomposition is None:
             raise Exception('Perform subspace identification first.')
-        ax.semilogy(np.diag(self.R32_decomposition.s), 'x')
+
+        ax.semilogy(np.diag(self.R32_decomposition.s.toarray()), 'x')
         ax.set_title('Estimated observability matrix decomposition')
         ax.set_xlabel('Index')
         ax.set_ylabel('Eigenvalue')

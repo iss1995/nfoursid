@@ -1,5 +1,6 @@
 from typing import Tuple
 import numpy as np
+from multiprocessing import Pool, cpu_count
 from scipy import sparse
 from scipy.sparse.linalg import svds
 
@@ -9,6 +10,9 @@ class Decomposition:
         self.u = u
         self.s = s
         self.vh = vh
+
+    def to_array(self):
+        self.u, self.s, self.vh = self.u.toarray(), self.s.toarray(), self.vh.toarray()
 
 
 class Utils:
@@ -45,12 +49,13 @@ class Utils:
         Reduce an eigenvalue decomposition ``decomposition`` such that only ``rank`` number of biggest eigenvalues
         remain. Returns another ``Decomposition`` adapted for sparse matrix operations.
         """
-        u, s, vh = decomposition.u, decomposition.s, decomposition.vh
+        u, s, vh = decomposition.u, decomposition.s.toarray(), decomposition.vh
         return Decomposition(
             u[:, :rank],
             s[:rank, :rank],
             vh[:rank, :]
         )
+    
     @staticmethod
     def block_hankel_matrix(
             matrix: np.ndarray,
@@ -76,23 +81,50 @@ class Utils:
         return hankel.tocsr()
 
     @staticmethod
-    def vectorize(matrix: np.ndarray) -> np.ndarray:
-        """
-        Given a matrix ``matrix`` of shape ``(a, b)``, return a vector of shape ``(a*b, 1)`` with all columns of
-        ``matrix`` stacked on top of each other.
-        """
-        return matrix.flatten(order='F').reshape(-1, 1)
+    def fill_hankel_slice(args):
+        matrix, start, end, num_block_rows = args
+        hankel_slice = sparse.lil_matrix((num_block_rows * matrix.shape[1], end - start))
+        for block_row_index in range(end - start):
+            flattened_block_rows = matrix[block_row_index+start:block_row_index+start+num_block_rows, :].flatten()
+            hankel_slice[:, block_row_index] = flattened_block_rows.flatten()
+        return hankel_slice
 
     @staticmethod
-    def unvectorize(vector: np.ndarray, num_rows: int) -> np.ndarray:
-        """
-        Given a vector ``vector`` of shape ``(num_rows*b, 1)``, return a matrix of shape ``(num_rows, b)`` such that
-        the stacked columns of the returned matrix equal ``vector``.
-        """
-        if vector.shape[0] % num_rows != 0 or vector.shape[1] != 1:
-            raise ValueError(f'Vector shape {vector.shape} and `num_rows`={num_rows} are incompatible')
-        return vector.reshape((num_rows, -1), order='F')
+    def block_hankel_matrix_parallel(matrix: np.ndarray, num_block_rows: int) -> sparse.csr_matrix:
+        hankel_rows_dim = num_block_rows * matrix.shape[1]
+        hankel_cols_dim = matrix.shape[0] - num_block_rows + 1
 
+        # Split the task into slices
+        num_slices = cpu_count() - 1
+        slice_size = hankel_cols_dim // num_slices
+        slices = [(matrix, i*slice_size, (i+1)*slice_size, num_block_rows) for i in range(num_slices)]
+        slices[-1] = (matrix, (num_slices-1)*slice_size, hankel_cols_dim, num_block_rows)  # Make sure the last slice goes to the end
+
+        # Create a multiprocessing Pool and fill each slice in parallel
+        with Pool() as p:
+            hankel_slices = p.map(Utils.fill_hankel_slice, slices)
+
+        # Concatenate the slices to form the full Hankel matrix
+        hankel = sparse.hstack(hankel_slices).tocsr()
+
+        return hankel
+
+    @staticmethod
+    def split_and_apply_block_hankel_matrix(matrix: np.ndarray, num_groups: int, num_block_rows: int):
+
+        # Split the matrix into groups
+        matrix_data = DataMatrix(matrix, chunks=num_groups, hankel_block_rows=num_block_rows)
+        groups = matrix_data.split()
+        matrix_data.reset_data(np.asarray([])[None, None])
+
+        # Create a multiprocessing Pool and apply the function to each group in parallel
+        with Pool(processes=num_groups) as p:
+            results = p.map(matrix_data, groups)
+
+        # Concatenate the results into a single matrix
+        results = sparse.hstack(results)
+
+        return results
 
     @staticmethod
     def vectorize(
@@ -117,3 +149,58 @@ class Utils:
             raise ValueError(f'Vector shape {vector.shape} and `num_rows`={num_rows} are incompatible')
         b = vector.shape[0] // num_rows
         return sparse.csr_matrix(vector.toarray().reshape((num_rows, b), order='F'))
+
+    @staticmethod
+    def sparse_qr(matrix: sparse.spmatrix, mode='NATURAL'):
+        """
+        Perform QR decomposition on a sparse matrix using direct sparse operations.
+
+        Parameters:
+        - matrix (sparse.spmatrix): A sparse matrix.
+
+        Returns:
+        - Q (sparse.spmatrix): Orthogonal matrix in sparse format.
+        - R (sparse.spmatrix): Upper triangular matrix in sparse format.
+        """
+        if not sparse.isspmatrix_csc(matrix):
+            matrix = matrix.tocsc()
+
+        # Direct sparse QR decomposition using SuiteSparseQR, if available
+        try:
+            from sksparse.cholmod import cholesky
+            factorization = cholesky(matrix.T.dot(matrix))
+            R = factorization.L().T
+            Q = sparse.spsolve(R, matrix.T, permc_spec=mode).T
+        except ImportError:
+            raise ImportError("The required library scikit-sparse is not installed. "
+                              "Please install it to use this QR decomposition.")
+
+        Q = sparse.csr_matrix(Q)
+        R = sparse.csr_matrix(R)
+
+        return Q, R
+
+
+class DataMatrix:
+
+    def __init__(self, data: np.ndarray, chunks=1, hankel_block_rows=1):
+        self.data = data
+        self.chunks = chunks
+        self.num_rows = data.shape[0]
+        self.num_cols = data.shape[1]
+        self.hankel_block_rows = hankel_block_rows
+
+    def __call__(self, data) -> sparse.csr_matrix:
+        return Utils.block_hankel_matrix(data, self.hankel_block_rows)
+
+    def __len__(self):
+        return self.num_rows
+
+    def split(self):
+        chunk_size = self.num_rows // self.chunks
+        return [self.data[i*chunk_size:(i+1)*chunk_size, :] for i in range(self.chunks)]
+
+    def reset_data(self, data):
+        self.data = data
+        self.num_rows = data.shape[0]
+        self.num_cols = data.shape[1]
