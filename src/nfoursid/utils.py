@@ -30,26 +30,29 @@ class Utils:
 
     @staticmethod
     def eigenvalue_decomposition(
-            matrix: sparse.spmatrix
+            matrix: sparse.spmatrix,
+            k_max : int = 5000
     ) -> Decomposition:
         """
         Calculate eigenvalue decomposition of a sparse ``matrix`` as a ``Decomposition``.
         Using singular value decomposition suitable for sparse matrices.
         """
-        # u, eigenvalues, vh = svds(matrix, return_singular_vectors=True , k=min(matrix.shape)-1, which='LM')
-        eigenvalues = svds(matrix, return_singular_vectors=False , k=min(matrix.shape)-1, which='LM')
-        u, vh = None, None
+        u, eigenvalues, vh = svds(matrix, return_singular_vectors=True, k=min(min(matrix.shape)-1, k_max), which='LM')
+        # eigenvalues = svds(matrix, return_singular_vectors=False , k=min(matrix.shape)-1, which='LM')
+        # u, vh = None, None
 
         # Sort the eigenvalues in descending order
         idxs = eigenvalues.argsort()[::-1]
         eigenvalues = eigenvalues[idxs]
-        # u, vh = u[:, idxs], vh[idxs, :]
-        # eigenvalues_mat = sparse.lil_matrix(u.shape[0], vh.shape[0])
-        eigenvalues_mat = sparse.lil_matrix(matrix.shape)
+        u, vh = u[:, idxs], vh[idxs, :]
+        eigenvalues_mat = sparse.lil_matrix((u.shape[1], vh.shape[0]))
+        # eigenvalues_mat = sparse.lil_matrix(matrix.shape)
         for i, val in enumerate(eigenvalues):
             eigenvalues_mat[i, i] = val
+
         eigenvalues_mat = eigenvalues_mat.tocsr()
-       
+        u = None
+
         return Decomposition(u, eigenvalues_mat, vh)
 
     @staticmethod
@@ -62,10 +65,15 @@ class Utils:
         remain. Returns another ``Decomposition`` adapted for sparse matrix operations.
         """
         u, s, vh = decomposition.u, decomposition.s.toarray(), decomposition.vh
+        s = sparse.csr_matrix(s[:rank, :rank])
+        if u is not None:
+            u = u[:, :rank]
+        if vh is not None:
+            vh = vh[:rank, :]
         return Decomposition(
-            u[:, :rank],
-            s[:rank, :rank],
-            vh[:rank, :]
+            u=u,
+            s=s,
+            vh=vh
         )
     
     @staticmethod

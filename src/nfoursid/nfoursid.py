@@ -159,7 +159,7 @@ class NFourSID:
         u_hankel = Utils.block_hankel_matrix_parallel(self.u_array, self.num_block_rows).tocsr()
         y_hankel = Utils.block_hankel_matrix_parallel(self.y_array, self.num_block_rows).tocsr()
         u_and_y = sparse.vstack([u_hankel, y_hankel])
-        observability = self.R32 @ np.linalg.pinv(self.R22)
+        observability = self.R32 @ np.linalg.pinv(self.R22.toarray()) 
         observability = sparse.csr_matrix(observability) @ u_and_y
         observability_decomposition = Utils.reduce_decomposition(
             Utils.eigenvalue_decomposition(observability),
