@@ -74,49 +74,37 @@ class NFourSID:
 
         observability_decomposition = self._apply_observability_decomposition()
 
-        covariance_matrix, abcd = self._calculate_covariance_matrix(observability_decomposition)
-
-        q = covariance_matrix[:self.x_dim, :self.x_dim]
-        r = covariance_matrix[self.x_dim:, self.x_dim:]
-        s = covariance_matrix[:self.x_dim, self.x_dim:]
-        state_space_covariance_matrix = np.block([
-            [r, s.T],
-            [s, q]
-        ])
-        return (
-            StateSpace(
-                abcd[:self.x_dim, :self.x_dim],
-                abcd[:self.x_dim, self.x_dim:],
-                abcd[self.x_dim:, :self.x_dim],
-                abcd[self.x_dim:, self.x_dim:],
-            ),
-            (state_space_covariance_matrix + state_space_covariance_matrix.T) / 2
-        )
+        return self._identify_state_space(observability_decomposition)
 
     def _apply_observability_decomposition(self):
+
+        u_and_y, R32, R22 = self._calulculate_hankel_and_qr()        
+
+        observability = R32 @ np.linalg.pinv(R22.toarray())
+        observability = sparse.csr_matrix(observability) @ u_and_y
+        observability_decomposition = Utils.reduce_decomposition(
+            Utils.eigenvalue_decomposition(observability),
+            self.x_dim
+        )
+        return observability_decomposition
+
+    def _calulculate_hankel_and_qr(self):
         u_hankel = Utils.block_hankel_matrix_parallel(self.u_array, self.num_block_rows).tocsr()
         y_hankel = Utils.block_hankel_matrix_parallel(self.y_array, self.num_block_rows).tocsr()
 
         u_past, u_future = u_hankel[:, :-self.num_block_rows], u_hankel[:, self.num_block_rows:]
         y_past, y_future = y_hankel[:, :-self.num_block_rows], y_hankel[:, self.num_block_rows:]
-        # u_instrumental_y = sparse.hstack([u_future, u_past, y_past, y_future])
+        u_instrumental_y = sparse.vstack([u_future, u_past, y_past, y_future])
 
-        # approximate QR with Cholesky
-        _, r = Utils.sparse_qr(sparse.hstack([u_future, u_past, y_past, y_future]).T, mode='NATURAL')
+        # q, r = map(lambda matrix: matrix.T, np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced'))
+        q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
 
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
-
-        R22 = r[u_rows:-y_rows, u_rows:-y_rows]
         R32 = r[-y_rows:, u_rows:-y_rows]
+        R22 = r[u_rows:-y_rows, u_rows:-y_rows]
+        u_and_y = sparse.vstack([u_hankel, y_hankel])
+        return u_and_y, R32, R22
 
-        u_and_y = sparse.hstack([u_hankel, y_hankel])
-        observability = R32 @ sparse.linalg.pinv(R22 @ u_and_y)
-        observability_decomposition = Utils.reduce_decomposition(
-            Utils.eigenvalue_decomposition(observability),
-            self.x_dim
-        )
-
-        return observability_decomposition
 
     def _calculate_covariance_matrix(self, observability_decomposition: Decomposition) -> np.ndarray:
         x = (np.sqrt(observability_decomposition.s.diagonal()) @ observability_decomposition.vh)[:, :-1]
