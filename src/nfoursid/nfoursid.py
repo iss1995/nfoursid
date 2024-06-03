@@ -47,7 +47,8 @@ class NFourSID:
         y_past, y_future = y_hankel[:, :-self.num_block_rows], y_hankel[:, self.num_block_rows:]
         u_instrumental_y = sparse.vstack([u_future, u_past, y_past, y_future])
 
-        q, r = np.linalg.qr(u_instrumental_y.toarray(), mode='reduced')  # QR on dense array
+        # q, r = map(lambda matrix: matrix.T, np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced'))
+        q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
 
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
         self.R32 = r[-y_rows:, u_rows:-y_rows]

@@ -36,8 +36,20 @@ class Utils:
         Calculate eigenvalue decomposition of a sparse ``matrix`` as a ``Decomposition``.
         Using singular value decomposition suitable for sparse matrices.
         """
-        u, eigenvalues, vh = svds(matrix, k=min(matrix.shape)-1)  # k is the number of singular values to compute
-        eigenvalues_mat = sparse.diags(eigenvalues)
+        # u, eigenvalues, vh = svds(matrix, return_singular_vectors=True , k=min(matrix.shape)-1, which='LM')
+        eigenvalues = svds(matrix, return_singular_vectors=False , k=min(matrix.shape)-1, which='LM')
+        u, vh = None, None
+
+        # Sort the eigenvalues in descending order
+        idxs = eigenvalues.argsort()[::-1]
+        eigenvalues = eigenvalues[idxs]
+        # u, vh = u[:, idxs], vh[idxs, :]
+        # eigenvalues_mat = sparse.lil_matrix(u.shape[0], vh.shape[0])
+        eigenvalues_mat = sparse.lil_matrix(matrix.shape)
+        for i, val in enumerate(eigenvalues):
+            eigenvalues_mat[i, i] = val
+        eigenvalues_mat = eigenvalues_mat.tocsr()
+       
         return Decomposition(u, eigenvalues_mat, vh)
 
     @staticmethod
@@ -167,10 +179,11 @@ class Utils:
 
         # Direct sparse QR decomposition using SuiteSparseQR, if available
         try:
-            from sksparse.cholmod import cholesky
+            from sksparse.cholmod import cholesky, cholesky_AAt
             factorization = cholesky(matrix.T.dot(matrix))
             R = factorization.L().T
-            Q = sparse.spsolve(R, matrix.T, permc_spec=mode).T
+            Q = sparse.linalg.spsolve(R, matrix.T, permc_spec=mode).T
+            
         except ImportError:
             raise ImportError("The required library scikit-sparse is not installed. "
                               "Please install it to use this QR decomposition.")
