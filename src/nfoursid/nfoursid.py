@@ -104,7 +104,8 @@ class NFourSID:
 
         print("Calculating QR decomposition...")
         # q, r = map(lambda matrix: matrix.T, np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced'))
-        q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
+        # q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
+        q, r = map(lambda matrix: matrix.T, Utils.qr_torch(u_instrumental_y.T))
 
         print("Calculating R32 and R22...")
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows

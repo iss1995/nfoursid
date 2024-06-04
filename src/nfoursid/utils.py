@@ -3,6 +3,7 @@ import numpy as np
 from multiprocessing import Pool, cpu_count
 from scipy import sparse
 from scipy.sparse.linalg import svds
+import torch
 
 
 class Decomposition:
@@ -187,7 +188,7 @@ class Utils:
 
         # Direct sparse QR decomposition using SuiteSparseQR, if available
         try:
-            from sksparse.cholmod import cholesky, cholesky_AAt
+            from sksparse.cholmod import cholesky
             factorization = cholesky(matrix.T.dot(matrix))
             R = factorization.L().T
             Q = sparse.linalg.spsolve(R, matrix.T, permc_spec=mode).T
@@ -201,6 +202,34 @@ class Utils:
 
         return Q, R
 
+    @staticmethod
+    def qr_torch(matrix: sparse.spmatrix):
+        """
+        Perform QR decomposition on a sparse matrix using PyTorch.
+
+        Parameters:
+        - matrix (sparse.spmatrix): A sparse matrix.
+
+        Returns:
+        - Q (torch.Tensor): Orthogonal matrix.
+        - R (torch.Tensor): Upper triangular matrix.
+        """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Convert the sparse matrix to a dense numpy array
+        matrix_np = matrix.toarray()
+
+        # Convert the numpy array to a PyTorch tensor
+        matrix_torch = torch.from_numpy(matrix_np).to(device)
+
+        # Perform the QR decomposition
+        Q, R = torch.linalg.qr(matrix_torch)
+
+        # Convert the PyTorch tensors to sparse matrices
+        Q = sparse.csr_matrix(Q.cpu().numpy())
+        R = sparse.csr_matrix(R.cpu().numpy())
+
+        return Q, R
 
 class DataMatrix:
 
