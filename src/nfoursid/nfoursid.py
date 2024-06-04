@@ -74,14 +74,18 @@ class NFourSID:
 
         observability_decomposition = self._apply_observability_decomposition()
 
+        print("Calculating covariance matrix")
         return self._identify_state_space(observability_decomposition)
 
     def _apply_observability_decomposition(self):
 
-        u_and_y, R32, R22 = self._calulculate_hankel_and_qr()        
+        u_and_y, R32, R22 = self._calulculate_hankel_and_qr()     
 
+        print("Calculating observability...")
         observability = R32 @ np.linalg.pinv(R22.toarray())
         observability = sparse.csr_matrix(observability) @ u_and_y
+
+        print("Reducing observability...")
         observability_decomposition = Utils.reduce_decomposition(
             Utils.eigenvalue_decomposition(observability),
             self.x_dim
@@ -89,6 +93,8 @@ class NFourSID:
         return observability_decomposition
 
     def _calulculate_hankel_and_qr(self):
+
+        print("Calculating Hankel matrices...")
         u_hankel = Utils.block_hankel_matrix_parallel(self.u_array, self.num_block_rows).tocsr()
         y_hankel = Utils.block_hankel_matrix_parallel(self.y_array, self.num_block_rows).tocsr()
 
@@ -96,15 +102,18 @@ class NFourSID:
         y_past, y_future = y_hankel[:, :-self.num_block_rows], y_hankel[:, self.num_block_rows:]
         u_instrumental_y = sparse.vstack([u_future, u_past, y_past, y_future])
 
+        print("Calculating QR decomposition...")
         # q, r = map(lambda matrix: matrix.T, np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced'))
         q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
 
+        print("Calculating R32 and R22...")
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
         R32 = r[-y_rows:, u_rows:-y_rows]
         R22 = r[u_rows:-y_rows, u_rows:-y_rows]
+
+        print("Stacking Hankel matrices...")
         u_and_y = sparse.vstack([u_hankel, y_hankel])
         return u_and_y, R32, R22
-
 
     def _calculate_covariance_matrix(self, observability_decomposition: Decomposition) -> np.ndarray:
         x = (np.sqrt(observability_decomposition.s.diagonal()) @ observability_decomposition.vh)[:, :-1]
@@ -118,12 +127,17 @@ class NFourSID:
         return covariance_matrix, abcd
 
     def _identify_state_space(self, observability_decomposition: Decomposition) -> Tuple[StateSpace, np.ndarray]:
+        print("Reconstructing the states...")
         x = (np.sqrt(observability_decomposition.s) @ observability_decomposition.vh)[:, :-1]
         last_y, last_u = self.y_array[self.num_block_rows:, :].T, self.u_array[self.num_block_rows:, :].T
         x_and_y = np.concatenate([x[:, 1:], last_y[:, :-1]])
         x_and_u = np.concatenate([x[:, :-1], last_u[:, :-1]])
+
+        print("Calculating state-space matrices...")
         abcd = np.linalg.pinv(x_and_u @ x_and_u.T) @ x_and_u @ x_and_y.T
         abcd = abcd.T
+
+        print("Calculating covariance matrix...")
         residuals = x_and_y - abcd @ x_and_u
         covariance_matrix = residuals @ residuals.T / residuals.shape[1]
         q = covariance_matrix[:self.x_dim, :self.x_dim]
