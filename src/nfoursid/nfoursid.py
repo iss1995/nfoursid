@@ -48,7 +48,8 @@ class NFourSID:
         u_instrumental_y = sparse.vstack([u_future, u_past, y_past, y_future])
 
         # q, r = map(lambda matrix: matrix.T, np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced'))
-        q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
+        # q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
+        q, r = map(lambda matrix: matrix.T, Utils.qr_torch(u_instrumental_y.T))
 
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
         self.R32 = r[-y_rows:, u_rows:-y_rows]
@@ -79,10 +80,11 @@ class NFourSID:
 
     def _apply_observability_decomposition(self):
 
-        u_and_y, R32, R22 = self._calulculate_hankel_and_qr()     
+        u_and_y, R32, R22 = self._calulculate_hankel_and_qr()
 
         print("Calculating observability...")
-        observability = R32 @ np.linalg.pinv(R22.toarray())
+        # observability = R32 @ np.linalg.pinv(R22.toarray())
+        observability = R32 @ Utils.sparse_pseudo_inverse(R22)
         observability = sparse.csr_matrix(observability) @ u_and_y
 
         print("Reducing observability...")
@@ -105,7 +107,7 @@ class NFourSID:
         print("Calculating QR decomposition...")
         # q, r = map(lambda matrix: matrix.T, np.linalg.qr(u_instrumental_y.toarray().T, mode='reduced'))
         # q, r = map(lambda matrix: matrix.T, Utils.sparse_qr(u_instrumental_y.T))
-        q, r = map(lambda matrix: matrix.T, Utils.qr_torch(u_instrumental_y.T))
+        q, r = map(lambda matrix: matrix.T, Utils.qr_torch(u_instrumental_y.T, mode='r'))
 
         print("Calculating R32 and R22...")
         y_rows, u_rows = self.y_dim * self.num_block_rows, self.u_dim * self.num_block_rows
@@ -134,8 +136,11 @@ class NFourSID:
         x_and_y = np.concatenate([x[:, 1:], last_y[:, :-1]])
         x_and_u = np.concatenate([x[:, :-1], last_u[:, :-1]])
 
+        print("Calculating the pseudo inverse...")
+        # abcd = np.linalg.pinv(x_and_u @ x_and_u.T) @ x_and_u @ x_and_y.T
+        abcd = Utils.sparse_pseudo_inverse(x_and_u @ x_and_u.T)
         print("Calculating state-space matrices...")
-        abcd = np.linalg.pinv(x_and_u @ x_and_u.T) @ x_and_u @ x_and_y.T
+        abcd = abcd @ x_and_u @ x_and_y.T
         abcd = abcd.T
 
         print("Calculating covariance matrix...")

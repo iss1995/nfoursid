@@ -32,7 +32,7 @@ class Utils:
     @staticmethod
     def eigenvalue_decomposition(
             matrix: sparse.spmatrix,
-            k_max : int = 5000
+            k_max: int = 5000
     ) -> Decomposition:
         """
         Calculate eigenvalue decomposition of a sparse ``matrix`` as a ``Decomposition``.
@@ -76,7 +76,7 @@ class Utils:
             s=s,
             vh=vh
         )
-    
+
     @staticmethod
     def block_hankel_matrix(
             matrix: np.ndarray,
@@ -112,14 +112,14 @@ class Utils:
 
     @staticmethod
     def block_hankel_matrix_parallel(matrix: np.ndarray, num_block_rows: int) -> sparse.csr_matrix:
-        hankel_rows_dim = num_block_rows * matrix.shape[1]
         hankel_cols_dim = matrix.shape[0] - num_block_rows + 1
 
         # Split the task into slices
         num_slices = cpu_count() - 1
         slice_size = hankel_cols_dim // num_slices
         slices = [(matrix, i*slice_size, (i+1)*slice_size, num_block_rows) for i in range(num_slices)]
-        slices[-1] = (matrix, (num_slices-1)*slice_size, hankel_cols_dim, num_block_rows)  # Make sure the last slice goes to the end
+        # Make sure the last slice goes to the end
+        slices[-1] = (matrix, (num_slices-1)*slice_size, hankel_cols_dim, num_block_rows)
 
         # Create a multiprocessing Pool and fill each slice in parallel
         with Pool() as p:
@@ -192,7 +192,7 @@ class Utils:
             factorization = cholesky(matrix.T.dot(matrix))
             R = factorization.L().T
             Q = sparse.linalg.spsolve(R, matrix.T, permc_spec=mode).T
-            
+
         except ImportError:
             raise ImportError("The required library scikit-sparse is not installed. "
                               "Please install it to use this QR decomposition.")
@@ -203,7 +203,7 @@ class Utils:
         return Q, R
 
     @staticmethod
-    def qr_torch(matrix: sparse.spmatrix):
+    def qr_torch(matrix: sparse.spmatrix, mode='complete'):
         """
         Perform QR decomposition on a sparse matrix using PyTorch.
 
@@ -223,13 +223,41 @@ class Utils:
         matrix_torch = torch.from_numpy(matrix_np).to(device)
 
         # Perform the QR decomposition
-        Q, R = torch.linalg.qr(matrix_torch)
+        Q, R = torch.linalg.qr(matrix_torch, mode=mode)
 
         # Convert the PyTorch tensors to sparse matrices
         Q = sparse.csr_matrix(Q.cpu().numpy())
         R = sparse.csr_matrix(R.cpu().numpy())
 
         return Q, R
+
+    @staticmethod
+    def sparse_pseudo_inverse(matrix, k=None):
+        """
+        Compute the pseudo-inverse of a sparse matrix using sparse SVD.
+
+        Parameters:
+        - matrix (scipy.sparse.spmatrix): Sparse matrix whose pseudo-inverse is needed.
+        - k (int): Number of singular values and vectors to compute. If None, use a heuristic based on matrix size.
+
+        Returns:
+        - pinv (scipy.sparse.spmatrix): Pseudo-inverse of the input matrix.
+        """
+        # Determine k if not provided
+        if k is None:
+            k = min(matrix.shape) - 1
+
+        # Compute the truncated SVD
+        u, s, vt = svds(matrix, k=k)
+
+        # Invert the non-zero singular values
+        s_inv = 1.0 / s
+
+        # Compute the pseudo-inverse
+        pinv = vt.T @ sparse.diags(s_inv) @ u.T
+
+        return sparse.csr_matrix(pinv)
+
 
 class DataMatrix:
 
