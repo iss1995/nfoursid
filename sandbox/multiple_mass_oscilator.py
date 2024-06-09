@@ -48,8 +48,8 @@ def discrete_state_space(ss, dt, cutoff=1e-4):
     sol = solve_ivp(integrand, tau_span, initial_state.ravel(), method="RK45", t_eval=[dt])
 
     Bd = sol.y[:, -1].reshape(ss.a.shape[0], ss.b.shape[1])
-    Bd[ np.abs(Bd) < cutoff ] = 0
-    Ad[ np.abs(Ad) < cutoff ] = 0
+    Bd[np.abs(Bd) < cutoff] = 0
+    Ad[np.abs(Ad) < cutoff] = 0
     return StateSpace(Ad, Bd, ss.c, ss.d)
 
 
@@ -236,7 +236,7 @@ if __name__ == "__main__":
     print()
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # Construct the state-space model of the system
-    n = 3
+    n = 10
     L = 1
     DT = 01e-2
     PERIODS = 15
@@ -245,14 +245,19 @@ if __name__ == "__main__":
     EXTRAPOLATION_LENGTH = PERIODS * PERIOD_LENGTH
     BURN_IN_LENGTH = BURN_IN_PERIODS * PERIOD_LENGTH
     # FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
-    phase = np.linspace(0, PERIODS * 2 * np.pi, EXTRAPOLATION_LENGTH)
+    phase = np.vstack(
+        [
+            np.linspace(init_phase, PERIODS * 2 * np.pi + init_phase, EXTRAPOLATION_LENGTH)
+            for init_phase in range(1, n, 2)
+        ]
+    ).T
     # FORCING = (5 * np.sin(10 * phase) + 5 * np.cos(phase)) * \
     #            np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH))
     _prbs = prbs(EXTRAPOLATION_LENGTH // PERIODS, Amplitude=50)
     FORCING = np.tile(_prbs, PERIODS)
     FORCING_TEST = (5 * np.sin(10 * phase) + 5 * np.cos(phase)) * np.tanh(
         np.linspace(0, EXTRAPOLATION_LENGTH * DT, EXTRAPOLATION_LENGTH)
-    )
+    )[:, None]
     # FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
 
     SAVE_FOLDER = os.path.join(os.path.dirname(__file__), "../results")
@@ -302,7 +307,7 @@ if __name__ == "__main__":
     x0 = x0_p.copy()
     for i in range(EXTRAPOLATION_LENGTH):
         _u = F.copy()
-        _u[1] += FORCING_TEST[i]
+        _u[1::2] += FORCING_TEST[i,:,None]
         _y, x0 = euler_forward(ss, x0, _u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
         y[i, :] = _y.flatten()
         x[i, :] = x0.flatten()
@@ -338,7 +343,6 @@ if __name__ == "__main__":
     u = np.zeros((EXTRAPOLATION_LENGTH, n))
     for i in range(EXTRAPOLATION_LENGTH):
         _u = F.copy() + 0.1 * np.random.standard_normal((n, 1)) * np.max(FORCING)
-        _u[1] += FORCING[i]
         noise = np.random.standard_normal((n, 1)) * 1e-3
 
         ss.step(_u, noise)
@@ -407,7 +411,7 @@ if __name__ == "__main__":
     x0_nominal = x0_p.copy()
     for i in range(EXTRAPOLATION_LENGTH):
         u = F.copy()
-        u[1] += FORCING_TEST[i]
+        u[1::2] += FORCING_TEST[i,:,None]
         _y, x0 = euler_forward(ss_identified, x0, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
         _y_nominal, x0_nominal = euler_forward(ss_n, x0_nominal, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
         y_pred[i, :] = _y.flatten()
