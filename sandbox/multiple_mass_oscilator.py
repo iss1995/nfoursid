@@ -4,9 +4,9 @@ from scipy.integrate import solve_ivp
 from scipy.linalg import expm
 import os
 import sys
+import random
 
-from sympy import li
-
+from nfoursid.nfoursid import NFourSID as NFourSID_n
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 from src.nfoursid.state_space import StateSpace
 from src.nfoursid.nfoursid import NFourSID
 from src.nfoursid.kalman import Kalman
+import matplotlib.pyplot as plt
+
+plt.style.use("seaborn-v0_8-colorblind")
 
 np.random.seed(0)  # reproducable results
 
@@ -39,7 +42,7 @@ def discrete_state_space(ss, dt):
 
     tau_span = [0, dt]
     initial_state = np.zeros((ss.a.shape[0], ss.b.shape[1])).ravel()
-    sol = solve_ivp(integrand, tau_span, initial_state.ravel(), method='RK45', t_eval=[dt])
+    sol = solve_ivp(integrand, tau_span, initial_state.ravel(), method="RK45", t_eval=[dt])
 
     Bd = sol.y[:, -1].reshape(ss.a.shape[0], ss.b.shape[1])
 
@@ -99,7 +102,7 @@ def construct_stable_state_space(
 
         # acceleration
         A[j + 1, j - 2] = Ks[i] / Ms[i]
-        A[j + 1, j] = - (Ks[i] - Ks[i + 1]) / Ms[i]
+        A[j + 1, j] = -(Ks[i] - Ks[i + 1]) / Ms[i]
         A[j + 1, j + 1] = -Cs[i] / Ms[i]
         A[j + 1, j + 2] = -Ks[i + 1] / Ms[i]
         F[i] = (Ks[i] + Ks[i + 1]) * L / Ms[i]
@@ -121,7 +124,7 @@ def construct_stable_state_space(
             print("System is unstable. Adjusting the parameters to ensure stability.")
             # adjust the parameters to ensure stability
             maxeigval = np.max(eigvals.real)
-            eigvals -= maxeigval*conditioning_coeff
+            eigvals -= maxeigval * conditioning_coeff
             A_candidate = eigvectors @ np.diag(eigvals) @ np.linalg.inv(eigvectors)
             eigvals, eigvectors = np.linalg.eig(A_candidate)
         A = A_candidate
@@ -143,7 +146,7 @@ def euler_forward(ss: StateSpace, x0: np.ndarray, u: np.ndarray, noise_model: Ca
         y: output of the system at the current time step
         x: state of the system after one time step
     """
-    x = ss.a @ x0 + ss.b @ u 
+    x = ss.a @ x0 + ss.b @ u
     y = ss.c @ x0 + ss.d @ u + noise_model()
     return y, x
 
@@ -156,97 +159,257 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
     returns:
         y: output of the function
     """
-    return 2 / (1 + np.exp(-x)) - 1/2
+    return 2 / (1 + np.exp(-x)) - 1 / 2
 
 
-# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-# Construct the state-space model of the system
-n = 10
-Ms = [3 for _ in range(n)]
-Ks = [10 for _ in range(n)]
-Cs = [100 for _ in range(n)]
-L = 1
-DT = 01e-2
-EXTRAPOLATION_LENGTH = 30000
-# FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
-phase = np.linspace(0, 5 * np.pi, EXTRAPOLATION_LENGTH)
-# FORCING = (50 * np.sin(10 * phase) + 50 * np.cos(phase)) * \
-#            np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH))
-FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
+def prbs(N, Amplitude=1):
+    """
+    Generate a Pseudo Random Binary Sequence (PRBS) signal of length N.
 
-ss, F = construct_stable_state_space(n, Ms, Ks, Cs, L, conditioning_coeff=1.05)
-ss = discrete_state_space(ss, DT)
+    Parameters:
+    - N (int): Length of the PRBS signal.
 
-# check stability
-eigvals = np.linalg.eigvals(ss.a)
-unstable = (eigvals.real**2 + eigvals.imag**2) > 1
-# warn if the system is unstable
-if np.any(unstable):
-    print("The system is unstable.")
-# define cmap for the scatter plot
-colors = ["blue" if not unst else "red" for unst in unstable]
+    Returns:
+    - np.ndarray: The generated PRBS signal consisting of -1 and 1.
+    """
+    # Seed the random number generator for reproducibility
+    np.random.seed(0)
 
-fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-ax.scatter(eigvals.real, eigvals.imag, c=colors, cmap="coolwarm")
-ax.set_title("Eigenvalues of the system")
-ax.set_xlabel("Real part")
-ax.set_ylabel("Imaginary part")
+    # Generate a random sequence of 0s and 1s
+    prbs_signal = np.random.choice([-Amplitude, Amplitude], size=N)
 
-unitary_circle = np.exp(1j * np.linspace(0, 2 * np.pi, 100))
-ax.plot(unitary_circle.real, unitary_circle.imag, "--", color="black")
-ax.axhline(0, color="black")
-ax.axvline(0, color="black")
-fig.tight_layout()
-ax.axis("equal")
-
-# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-# Simulate the system
-for i in range(EXTRAPOLATION_LENGTH):
-    input_state = F.copy()
-    input_state[-1] += FORCING[i]
-    noise = np.random.standard_normal((n, 1)) * 1e-3
-
-    ss.step(input_state, noise)
-
-fig, axs = plt.subplots(2, 1, figsize=(12, 8))
-ss.plot_input_output(fig)
-fig.tight_layout()
-
-# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-# find stationary point
-x0 = np.linalg.solve(ss.a, ss.b @ (-F))
-print(f"Stationary point: {x0.T}")
-
-# Simulate the system with forward Euler integration
-y = np.zeros((EXTRAPOLATION_LENGTH, n))
-x = np.zeros((EXTRAPOLATION_LENGTH, 2 * n))
-for i in range(EXTRAPOLATION_LENGTH):
-    u = F.copy()
-    u[0] += FORCING[i]
-    _y, x0 = euler_forward(ss, x0, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
-    y[i, :] = _y.flatten()
-    x[i, :] = x0.flatten()
-
-# plot the results
-fig, axs = plt.subplots(3, 1, figsize=(12, 8))
-for i in range(n):
-    axs[0].plot(y[:, i], label=f"mass {i+1}", color=f"C{i}")
-    axs[1].plot(x[:, 2 * i], label=f"position mass {i+1}", color=f"C{i}")
-    axs[1].plot(x[:, 2 * i + 1], label=f"velocity mass {i+1}", linestyle="--", color=f"C{i}")
-axs[2].plot(FORCING, label="forcing")
-axs[2].plot(np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH)), label= "activation", linestyle="--")
-
-# axs[0].legend()
-# axs[1].legend()
-# axs[2].legend()
-axs[0].set_title("Response of the system to the forcing")
-axs[2].set_xlabel("time [s]")
-axs[0].set_ylabel("position [m]")
-axs[1].set_ylabel("state")
-axs[2].set_ylabel("force [N]")
-fig.tight_layout()
+    return prbs_signal
 
 
+def introduce_initial_conditions(ss: StateSpace, x0: np.ndarray) -> StateSpace:
+    """
+    Introduce initial conditions to the state-space model.
+    params:
+        ss: StateSpace object representing the system
+        x0: initial state of the system
+    returns:
+        ss: StateSpace object with initial conditions
+    """
+    ss_new = StateSpace(ss.a.copy(), ss.b.copy(), ss.c.copy(), ss.d.copy(), x_init=x0)
+    return ss_new
 
 
-# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+def random_system(n: int):
+    """
+    Construct a random system with n masses.
+    params:
+        n: number of masses
+    returns:
+        ss: StateSpace object representing the system
+        F: force vector
+    """
+    Ms = [3 + random.randint(-2, 3) for _ in range(n)]
+    Ks = [20 + random.randint(-10, 10) for _ in range(n)]
+    Cs = [100 + random.randint(-10, 10) for _ in range(n)]
+    L = 1
+    ss, F = construct_stable_state_space(n, Ms, Ks, Cs, L, conditioning_coeff=1.05)
+    return ss, F
+
+
+def deterministic_system(n: int):
+    """
+    Construct a deterministic system with n masses.
+    params:
+        n: number of masses
+    returns:
+        ss: StateSpace object representing the system
+        F: force vector
+    """
+    Ms = [3 for _ in range(n)]
+    Ks = [20 for _ in range(n)]
+    Cs = [100 for _ in range(n)]
+    L = 1
+    ss, F = construct_stable_state_space(n, Ms, Ks, Cs, L, conditioning_coeff=1.05)
+    return ss, F
+
+
+if __name__ == "__main__":
+    print()
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # Construct the state-space model of the system
+    n = 3
+    L = 1
+    DT = 01e-2
+    PERIODS = 15
+    PERIOD_LENGTH = 1000
+    BURN_IN_PERIODS = 1 * (PERIODS//4) + 1
+    EXTRAPOLATION_LENGTH = PERIODS * PERIOD_LENGTH
+    BURN_IN_LENGTH = BURN_IN_PERIODS * PERIOD_LENGTH
+    # FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
+    phase = np.linspace(0, PERIODS * 2 * np.pi, EXTRAPOLATION_LENGTH)
+    # FORCING = (5 * np.sin(10 * phase) + 5 * np.cos(phase)) * \
+    #            np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH))
+    _prbs = prbs(EXTRAPOLATION_LENGTH // PERIODS, Amplitude=50)
+    FORCING = np.tile(_prbs, PERIODS)
+    FORCING_TEST = (5 * np.sin(10 * phase) + 5 * np.cos(phase)) * \
+                    np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH))
+    # FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
+
+    ss, F = deterministic_system(n)
+    ss = discrete_state_space(ss, DT)
+
+    # check stability
+    eigvals = np.linalg.eigvals(ss.a)
+    unstable = (eigvals.real**2 + eigvals.imag**2) > 1
+    # warn if the system is unstable
+    if np.any(unstable):
+        print("The system is unstable.")
+    # define cmap for the scatter plot
+    colors = ["blue" if not unst else "red" for unst in unstable]
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    ax.scatter(eigvals.real, eigvals.imag, c=colors, cmap="coolwarm")
+    ax.set_title("Eigenvalues of the system")
+    ax.set_xlabel("Real part")
+    ax.set_ylabel("Imaginary part")
+
+    unitary_circle = np.exp(1j * np.linspace(0, 2 * np.pi, 100))
+    ax.plot(unitary_circle.real, unitary_circle.imag, "--", color="black")
+    ax.axhline(0, color="black")
+    ax.axvline(0, color="black")
+    fig.tight_layout()
+    ax.axis("equal")
+
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # find stationary point
+    x0_p = np.linalg.solve(ss.a, ss.b @ (-F))
+    print(f"Stationary point: {x0_p.T}")
+
+    # Simulate the system with forward Euler integration
+    y = np.zeros((EXTRAPOLATION_LENGTH, n))
+    x = np.zeros((EXTRAPOLATION_LENGTH, 2 * n))
+    x0 = x0_p.copy()
+    for i in range(EXTRAPOLATION_LENGTH):
+        u = F.copy()
+        u[0] += FORCING_TEST[i]
+        _y, x0 = euler_forward(ss, x0, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
+        y[i, :] = _y.flatten()
+        x[i, :] = x0.flatten()
+
+    # plot the results
+    fig, axs = plt.subplots(3, 1, figsize=(12, 8))
+    for i in range(n):
+        axs[0].plot(y[:, i], label=f"mass {i+1}", color=f"C{i}")
+        axs[1].plot(x[:, 2 * i], label=f"position mass {i+1}", color=f"C{i}")
+        axs[1].plot(x[:, 2 * i + 1], label=f"velocity mass {i+1}", linestyle="--", color=f"C{i}")
+    axs[2].plot(FORCING, label="forcing")
+    axs[2].plot(
+        np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH * DT, EXTRAPOLATION_LENGTH)), label="activation", linestyle="--"
+    )
+
+    # axs[0].legend()
+    # axs[1].legend()
+    # axs[2].legend()
+    axs[0].set_title("Response of the system to the forcing")
+    axs[2].set_xlabel("time [s]")
+    axs[0].set_ylabel("position [m]")
+    axs[1].set_ylabel("state")
+    axs[2].set_ylabel("force [N]")
+    fig.tight_layout()
+
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # generate data
+    for i in range(EXTRAPOLATION_LENGTH):
+        input_state = F.copy()  + 0.1 * np.random.standard_normal((n, 1)) * np.max(FORCING)
+        input_state[-1] += FORCING[i]
+        noise = np.random.standard_normal((n, 1)) * 1e-3
+
+        ss.step(input_state, noise)
+
+    fig, axs = plt.subplots(2, 1, figsize=(12, 8))
+    ss.plot_input_output(fig)
+    fig.tight_layout()
+
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # Sys ID with the original package
+    nfoursid_n = NFourSID_n(
+        ss.to_dataframe().iloc[BURN_IN_LENGTH:,:],  # the state-space model can summarize inputs and outputs as a dataframe
+        output_columns=ss.y_column_names,
+        input_columns=ss.u_column_names,
+        num_block_rows=4 * n,
+    )
+    nfoursid_n.subspace_identification()
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    nfoursid_n.plot_eigenvalues(ax)  # estimated observability matrix eigenvalues
+    fig.tight_layout()  # <- number of eigenvalues that stand out is your state
+
+    ORDER_OF_MODEL_TO_FIT = 2 * n
+    ss_n, covariance_matrix_1 = nfoursid_n.system_identification(rank=ORDER_OF_MODEL_TO_FIT)
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # train the model
+    nfoursid = NFourSID(
+        ss.to_dataframe().iloc[BURN_IN_LENGTH:,:], output_columns=ss.y_column_names, input_columns=ss.u_column_names, num_block_rows=4 * n
+    )
+
+    ss_identified, covariance_matrix = nfoursid.apply_n4sid(rank=2 * n)
+
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # compare the identified and the original system
+    y_pred = np.zeros((EXTRAPOLATION_LENGTH, n))
+    x_pred = np.zeros((EXTRAPOLATION_LENGTH, 2 * n))
+    x_pred_nominal = np.zeros((EXTRAPOLATION_LENGTH, 2 * n))
+    y_pred_nominal = np.zeros((EXTRAPOLATION_LENGTH, n))
+    x0 = x0_p.copy()
+    x0_nominal = x0_p.copy()
+    for i in range(EXTRAPOLATION_LENGTH):
+        u = F.copy()
+        u[0] += FORCING_TEST[i]
+        _y, x0 = euler_forward(ss_identified, x0, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
+        _y_nominal, x0_nominal = euler_forward(ss_n, x0_nominal, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
+        y_pred[i, :] = _y.flatten()
+        x_pred[i, :] = x0.flatten()
+        y_pred_nominal[i, :] = _y_nominal.flatten()
+        x_pred_nominal[i, :] = x0_nominal.flatten()
+
+    # calculate the error with transients
+    error = np.mean(np.abs((y - y_pred)) / np.abs(y)) * 100
+    error_n = np.mean(np.abs((y - y_pred_nominal)) / np.abs(y)) * 100
+    print(f"Mean relative error with transients:\n\tNominal {error_n:0.4f}% \tIdentified {error:0.4f}%")
+
+    # calculate the error without transients
+    error = np.mean((np.abs((y - y_pred)) / np.abs(y))[BURN_IN_LENGTH:]) * 100
+    error_n = np.mean((np.abs((y - y_pred_nominal)) / np.abs(y))[BURN_IN_LENGTH:]) * 100
+    print(f"Mean relative error without transients:\n\tNominal {error_n:0.4f}% \tIdentified {error:0.4f}%")
+
+    # plot the results
+    fig, axs = plt.subplots(3, 1, figsize=(12, 8))
+    _time = np.arange(BURN_IN_LENGTH, EXTRAPOLATION_LENGTH) * DT
+    for i in range(n):
+        axs[0].plot(_time, y[BURN_IN_LENGTH:, i], label=f"mass {i+1}", color=f"C{i}", alpha=0.3)
+        axs[0].plot(
+            _time, y_pred[BURN_IN_LENGTH:, i], label=f"mass {i+1} identified", linestyle="--", color=f"C{i}", alpha=0.5
+        )
+        axs[0].plot(
+            _time,
+            y_pred_nominal[BURN_IN_LENGTH:, i],
+            label=f"mass {i+1} nominal",
+            linestyle="-.",
+            color=f"C{i}",
+            alpha=0.8,
+        )
+    axs[1].plot(_time, ((y - y_pred) / y)[BURN_IN_LENGTH:] * 100, label="error identified")
+    axs[1].plot(_time, ((y - y_pred_nominal) / y)[BURN_IN_LENGTH:] * 100, label="error nominal")
+    axs[2].plot(_time[:PERIOD_LENGTH], FORCING[:PERIOD_LENGTH], label="forcing")
+    # axs[2].plot(_time,
+    #     np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH * DT, EXTRAPOLATION_LENGTH))[BURN_IN_LENGTH:], label="activation", linestyle="--"
+    # )
+
+    # axs[0].legend()
+    # axs[1].legend()
+    # axs[2].legend()
+    axs[0].set_title("Response of the system to the forcing")
+    axs[2].set_xlabel("time [s]")
+    axs[0].set_ylabel("position [m]")
+    axs[1].set_ylabel("error")
+    axs[2].set_ylabel("force [N]")
+
+    axs[1].set_ylim([-200, 200])
+    fig.tight_layout()
+
+# %%
