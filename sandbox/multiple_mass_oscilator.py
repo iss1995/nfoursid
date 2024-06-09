@@ -1,17 +1,20 @@
 # %% Importing libraries and defining functions
+from datetime import datetime
+from re import A
 from typing import Callable, List, Tuple
+from pandas import DataFrame
 from scipy.integrate import solve_ivp
 from scipy.linalg import expm
 import os
 import sys
 import random
+import numpy as np
+import matplotlib.pyplot as plt
 
 from nfoursid.nfoursid import NFourSID as NFourSID_n
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-import numpy as np
-import matplotlib.pyplot as plt
 
 from src.nfoursid.state_space import StateSpace
 from src.nfoursid.nfoursid import NFourSID
@@ -23,7 +26,7 @@ plt.style.use("seaborn-v0_8-colorblind")
 np.random.seed(0)  # reproducable results
 
 
-def discrete_state_space(ss, dt):
+def discrete_state_space(ss, dt, cutoff=1e-4):
     """
     Converts a continuous state-space system to a discrete one with a given sampling time dt.
 
@@ -45,7 +48,8 @@ def discrete_state_space(ss, dt):
     sol = solve_ivp(integrand, tau_span, initial_state.ravel(), method="RK45", t_eval=[dt])
 
     Bd = sol.y[:, -1].reshape(ss.a.shape[0], ss.b.shape[1])
-
+    Bd[ np.abs(Bd) < cutoff ] = 0
+    Ad[ np.abs(Ad) < cutoff ] = 0
     return StateSpace(Ad, Bd, ss.c, ss.d)
 
 
@@ -237,7 +241,7 @@ if __name__ == "__main__":
     DT = 01e-2
     PERIODS = 15
     PERIOD_LENGTH = 1000
-    BURN_IN_PERIODS = 1 * (PERIODS//4) + 1
+    BURN_IN_PERIODS = 1 * (PERIODS // 4) + 1
     EXTRAPOLATION_LENGTH = PERIODS * PERIOD_LENGTH
     BURN_IN_LENGTH = BURN_IN_PERIODS * PERIOD_LENGTH
     # FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
@@ -246,9 +250,18 @@ if __name__ == "__main__":
     #            np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH))
     _prbs = prbs(EXTRAPOLATION_LENGTH // PERIODS, Amplitude=50)
     FORCING = np.tile(_prbs, PERIODS)
-    FORCING_TEST = (5 * np.sin(10 * phase) + 5 * np.cos(phase)) * \
-                    np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH*DT, EXTRAPOLATION_LENGTH))
+    FORCING_TEST = (5 * np.sin(10 * phase) + 5 * np.cos(phase)) * np.tanh(
+        np.linspace(0, EXTRAPOLATION_LENGTH * DT, EXTRAPOLATION_LENGTH)
+    )
     # FORCING = np.ones((EXTRAPOLATION_LENGTH, 1))
+
+    SAVE_FOLDER = os.path.join(os.path.dirname(__file__), "../results")
+    name_tag = f"n{n}_L{L}_P{PERIODS}_PL{PERIOD_LENGTH}_BI{BURN_IN_PERIODS}_DT{DT}"
+    date_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    FIGURES_FOLDER = os.path.join(SAVE_FOLDER, f"figures/{name_tag}/{date_tag}")
+    MODELS_FOLDER = os.path.join(SAVE_FOLDER, f"models/{name_tag}/{date_tag}")
+    os.makedirs(FIGURES_FOLDER, exist_ok=True)
+    os.makedirs(MODELS_FOLDER, exist_ok=True)
 
     ss, F = deterministic_system(n)
     ss = discrete_state_space(ss, DT)
@@ -275,6 +288,8 @@ if __name__ == "__main__":
     fig.tight_layout()
     ax.axis("equal")
 
+    plt.savefig(os.path.join(FIGURES_FOLDER, "eigenvalues.png"), bbox_inches="tight", dpi=300)
+
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # find stationary point
     x0_p = np.linalg.solve(ss.a, ss.b @ (-F))
@@ -283,13 +298,15 @@ if __name__ == "__main__":
     # Simulate the system with forward Euler integration
     y = np.zeros((EXTRAPOLATION_LENGTH, n))
     x = np.zeros((EXTRAPOLATION_LENGTH, 2 * n))
+    u = np.zeros((EXTRAPOLATION_LENGTH, n))
     x0 = x0_p.copy()
     for i in range(EXTRAPOLATION_LENGTH):
-        u = F.copy()
-        u[0] += FORCING_TEST[i]
-        _y, x0 = euler_forward(ss, x0, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
+        _u = F.copy()
+        _u[1] += FORCING_TEST[i]
+        _y, x0 = euler_forward(ss, x0, _u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
         y[i, :] = _y.flatten()
         x[i, :] = x0.flatten()
+        u[i, :] = _u.flatten()
 
     # plot the results
     fig, axs = plt.subplots(3, 1, figsize=(12, 8))
@@ -297,7 +314,7 @@ if __name__ == "__main__":
         axs[0].plot(y[:, i], label=f"mass {i+1}", color=f"C{i}")
         axs[1].plot(x[:, 2 * i], label=f"position mass {i+1}", color=f"C{i}")
         axs[1].plot(x[:, 2 * i + 1], label=f"velocity mass {i+1}", linestyle="--", color=f"C{i}")
-    axs[2].plot(FORCING, label="forcing")
+    axs[2].plot(FORCING_TEST, label="forcing")
     axs[2].plot(
         np.tanh(np.linspace(0, EXTRAPOLATION_LENGTH * DT, EXTRAPOLATION_LENGTH)), label="activation", linestyle="--"
     )
@@ -312,23 +329,35 @@ if __name__ == "__main__":
     axs[2].set_ylabel("force [N]")
     fig.tight_layout()
 
+    plt.savefig(os.path.join(FIGURES_FOLDER, "Test_data.png"), bbox_inches="tight", dpi=300)
+    DataFrame(y).to_csv(os.path.join(MODELS_FOLDER, "test_target.csv"))
+    DataFrame(FORCING_TEST).to_csv(os.path.join(MODELS_FOLDER, "test_forcing.csv"))
+    DataFrame(u).to_csv(os.path.join(MODELS_FOLDER, "test_input.csv"))
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # generate data
+    u = np.zeros((EXTRAPOLATION_LENGTH, n))
     for i in range(EXTRAPOLATION_LENGTH):
-        input_state = F.copy()  + 0.1 * np.random.standard_normal((n, 1)) * np.max(FORCING)
-        input_state[-1] += FORCING[i]
+        _u = F.copy() + 0.1 * np.random.standard_normal((n, 1)) * np.max(FORCING)
+        _u[1] += FORCING[i]
         noise = np.random.standard_normal((n, 1)) * 1e-3
 
-        ss.step(input_state, noise)
+        ss.step(_u, noise)
+        u[i, :] = _u.flatten()
 
     fig, axs = plt.subplots(2, 1, figsize=(12, 8))
     ss.plot_input_output(fig)
     fig.tight_layout()
 
+    plt.savefig(os.path.join(FIGURES_FOLDER, "Training_data.png"), bbox_inches="tight", dpi=300)
+    DataFrame(np.asarray(ss.ys).squeeze()).to_csv(os.path.join(MODELS_FOLDER, "training_target.csv"))
+    DataFrame(FORCING).to_csv(os.path.join(MODELS_FOLDER, "training_forcing.csv"))
+    DataFrame(u).to_csv(os.path.join(MODELS_FOLDER, "training_input.csv"))
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # Sys ID with the original package
     nfoursid_n = NFourSID_n(
-        ss.to_dataframe().iloc[BURN_IN_LENGTH:,:],  # the state-space model can summarize inputs and outputs as a dataframe
+        ss.to_dataframe().iloc[
+            BURN_IN_LENGTH:, :
+        ],  # the state-space model can summarize inputs and outputs as a dataframe
         output_columns=ss.y_column_names,
         input_columns=ss.u_column_names,
         num_block_rows=4 * n,
@@ -339,15 +368,34 @@ if __name__ == "__main__":
     nfoursid_n.plot_eigenvalues(ax)  # estimated observability matrix eigenvalues
     fig.tight_layout()  # <- number of eigenvalues that stand out is your state
 
+    plt.savefig(os.path.join(FIGURES_FOLDER, "eigenvalues_n4sid.png"), bbox_inches="tight", dpi=300)
+
     ORDER_OF_MODEL_TO_FIT = 2 * n
     ss_n, covariance_matrix_1 = nfoursid_n.system_identification(rank=ORDER_OF_MODEL_TO_FIT)
+
+    DataFrame(ss_n.a).to_csv(os.path.join(MODELS_FOLDER, "A_n.csv"))
+    DataFrame(ss_n.b).to_csv(os.path.join(MODELS_FOLDER, "B_n.csv"))
+    DataFrame(ss_n.c).to_csv(os.path.join(MODELS_FOLDER, "C_n.csv"))
+    DataFrame(ss_n.d).to_csv(os.path.join(MODELS_FOLDER, "D_n.csv"))
+    DataFrame(covariance_matrix_1).to_csv(os.path.join(MODELS_FOLDER, "covariance_matrix_n.csv"))
+    DataFrame(x0_p).to_csv(os.path.join(MODELS_FOLDER, "x0_n.csv"))
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # train the model
     nfoursid = NFourSID(
-        ss.to_dataframe().iloc[BURN_IN_LENGTH:,:], output_columns=ss.y_column_names, input_columns=ss.u_column_names, num_block_rows=4 * n
+        ss.to_dataframe().iloc[BURN_IN_LENGTH:, :],
+        output_columns=ss.y_column_names,
+        input_columns=ss.u_column_names,
+        num_block_rows=4 * n,
     )
 
     ss_identified, covariance_matrix = nfoursid.apply_n4sid(rank=2 * n)
+
+    DataFrame(ss_identified.a).to_csv(os.path.join(MODELS_FOLDER, "A.csv"))
+    DataFrame(ss_identified.b).to_csv(os.path.join(MODELS_FOLDER, "B.csv"))
+    DataFrame(ss_identified.c).to_csv(os.path.join(MODELS_FOLDER, "C.csv"))
+    DataFrame(ss_identified.d).to_csv(os.path.join(MODELS_FOLDER, "D.csv"))
+    DataFrame(covariance_matrix).to_csv(os.path.join(MODELS_FOLDER, "covariance_matrix.csv"))
+    DataFrame(x0_p).to_csv(os.path.join(MODELS_FOLDER, "x0.csv"))
 
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # compare the identified and the original system
@@ -359,7 +407,7 @@ if __name__ == "__main__":
     x0_nominal = x0_p.copy()
     for i in range(EXTRAPOLATION_LENGTH):
         u = F.copy()
-        u[0] += FORCING_TEST[i]
+        u[1] += FORCING_TEST[i]
         _y, x0 = euler_forward(ss_identified, x0, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
         _y_nominal, x0_nominal = euler_forward(ss_n, x0_nominal, u, lambda: np.random.standard_normal((n, 1)) * 1e-3)
         y_pred[i, :] = _y.flatten()
@@ -412,4 +460,8 @@ if __name__ == "__main__":
     axs[1].set_ylim([-200, 200])
     fig.tight_layout()
 
+    plt.savefig(os.path.join(FIGURES_FOLDER, "Comparison.png"), bbox_inches="tight", dpi=300)
+
+    DataFrame(100 * np.abs((y - y_pred)) / np.abs(y)).to_csv(os.path.join(MODELS_FOLDER, "error.csv"))
+    DataFrame(100 * np.abs((y - y_pred_nominal)) / np.abs(y)).to_csv(os.path.join(MODELS_FOLDER, "error_n.csv"))
 # %%
