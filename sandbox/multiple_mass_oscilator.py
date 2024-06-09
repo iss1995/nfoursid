@@ -268,7 +268,8 @@ if __name__ == "__main__":
     os.makedirs(FIGURES_FOLDER, exist_ok=True)
     os.makedirs(MODELS_FOLDER, exist_ok=True)
 
-    ss, F = deterministic_system(n)
+    # ss, F = deterministic_system(n)
+    ss, F = random_system(n)
     ss = discrete_state_space(ss, DT)
 
     # check stability
