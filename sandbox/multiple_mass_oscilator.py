@@ -38,18 +38,18 @@ def discrete_state_space(ss, dt, cutoff=1e-4):
     """
     # Compute the matrix exponential of A * dt for Ad
     Ad = expm(ss.a * dt)
+    Bd = np.linalg.inv(ss.a) @ (Ad - np.eye(ss.a.shape[0])) @ ss.b
+    # # Compute Bd using numerical integration
+    # def integrand(tau, _):
+    #     return (expm(ss.a * (dt - tau)) @ ss.b).ravel()
 
-    # Compute Bd using numerical integration
-    def integrand(tau, _):
-        return (expm(ss.a * (dt - tau)) @ ss.b).ravel()
+    # tau_span = [0, dt]
+    # initial_state = np.zeros((ss.a.shape[0], ss.b.shape[1])).ravel()
+    # sol = solve_ivp(integrand, tau_span, initial_state.ravel(), method="RK45", t_eval=[dt])
 
-    tau_span = [0, dt]
-    initial_state = np.zeros((ss.a.shape[0], ss.b.shape[1])).ravel()
-    sol = solve_ivp(integrand, tau_span, initial_state.ravel(), method="RK45", t_eval=[dt])
-
-    Bd = sol.y[:, -1].reshape(ss.a.shape[0], ss.b.shape[1])
-    Bd[np.abs(Bd) < cutoff] = 0
-    Ad[np.abs(Ad) < cutoff] = 0
+    # Bd = sol.y[:, -1].reshape(ss.a.shape[0], ss.b.shape[1])
+    # Bd[np.abs(Bd) < cutoff] = 0
+    # Ad[np.abs(Ad) < cutoff] = 0
     return StateSpace(Ad, Bd, ss.c, ss.d)
 
 
@@ -133,7 +133,7 @@ def construct_stable_state_space(
             eigvals, eigvectors = np.linalg.eig(A_candidate)
         A = A_candidate
 
-        A.imag = np.zeros_like(A.real)
+        A = A.real
 
     return StateSpace(A, B, C, D), F
 
@@ -298,7 +298,7 @@ if __name__ == "__main__":
 
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # find stationary point
-    x0_p = np.linalg.solve(ss.a, ss.b @ (-F))
+    x0_p = np.linalg.solve(ss.a, ss.b @ (F))
     print(f"Stationary point: {x0_p.T}")
 
     # Simulate the system with forward Euler integration
